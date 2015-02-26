@@ -11,6 +11,14 @@
 %%% This we can dynamically change any aspect during a course of the
 %%% game.
 %%%
+%%% For testing purposes simple console based UI was also added to
+%%% this file, so we don't have to create multiple files. In this mode
+%%% the game can be run as following:
+%%%
+%%% ```
+%%% erl -eval 'compile:file(text_adv_game)' -eval 'text_adv_game:console_play()' -eval 'init:stop()' -noshell
+%%% '''
+%%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(text_adv_game).
@@ -28,7 +36,10 @@
 %% them by name later. Command dispatch table is a part of our process
 %% state, so we couldn't just use short function references (fun
 %% name/X) here, or we'll lose ability to reload changed code.
--export([cmd_look/4, cmd_go/4, cmd_get/4]).
+-export([cmd_look/4, cmd_go/4, cmd_get/4, cmd_quit/4]).
+
+%% Very simple console user UI.
+-export([console_play/0]).
 
 %% We are storing our gen_server state in map.
 -type state() :: #{}.
@@ -68,7 +79,9 @@
 -define(KNOWN_COMMANDS, #{<<"look">> => cmd_look,
                           <<"go">> => cmd_go,
                           <<"get">> => cmd_get,
-                          <<"take">> => cmd_get}).
+                          <<"take">> => cmd_get,
+                          <<"quit">> => cmd_quit,
+                          <<"exit">> => cmd_exit}).
 
 %%%===================================================================
 %%% API
@@ -93,7 +106,7 @@ handle_call({command, Cmd, Args}, _From, State) ->
     {State1, Reply} = run_cmd(Cmd, Args, State),
     case is_final_state(State1) of
         true ->
-            {stop, normal, Reply, State1};
+            {stop, normal, add_reply_game_end(maps:get(status, State1), Reply), State1};
         false ->
             {reply, Reply, State1}
     end;
@@ -154,21 +167,30 @@ cmd_go(_Cmd, _Direction, State, Reply) ->
 cmd_get(_Cmd, _Object, State, Reply) ->
     {State, Reply}.
 
+%% @doc Stop the game
+-spec cmd_quit(Cmd :: binary(), Args :: [binary()], State :: state(), Reply :: reply()) -> {state(), reply()}.
+cmd_quit(_Cmd, _Object, State, Reply) ->
+    {State#{status := quit}, Reply}.
+
 %%%===================================================================
 %%% Internal functions
 %%%===================================================================
-
+is_final_state(#{status := playing}) ->
+    false;
 is_final_state(_State) ->
-    false.
+    true.
 
 make_empty_reply() ->
-    #{ errors => [], messages => []}.
+    #{ errors => [], messages => [], game_end => false}.
 
 add_reply_error(FormatStr, Data, Reply) ->
-    Reply#{ errors => [ list_to_binary(io_lib:format(FormatStr, Data)) | maps:get(errors, Reply) ]}.
+    Reply#{ errors := [ list_to_binary(io_lib:format(FormatStr, Data)) | maps:get(errors, Reply) ]}.
 
 add_reply_text(FormatStr, Data, Reply) ->
-    Reply#{ messages => [ list_to_binary(io_lib:format(FormatStr, Data)) | maps:get(messages, Reply) ]}.
+    Reply#{ messages := [ list_to_binary(io_lib:format(FormatStr, Data)) | maps:get(messages, Reply) ]}.
+
+add_reply_game_end(Description, Reply) ->
+    Reply#{ game_end := Description }.
 
 describe_room(#{location := Location, rooms := Rooms}) ->
     maps:get(Location, Rooms).
@@ -181,4 +203,35 @@ make_game_state() ->
      , rooms => ?ROOMS
      , edges => ?EDGES
      , commands => ?KNOWN_COMMANDS
+     , status => playing
      }.
+
+%%%===================================================================
+%%% Simple text interface for testing
+%%%===================================================================
+get_cmd() ->
+    Line = case io:get_line(">>> ") of
+               Str when is_list(Str) -> Str;
+               Str when is_binary(Str) -> binary_to_list(Str);
+               eof -> [<<"quit">>]
+           end,
+    [ list_to_binary(Token) || Token <- string:tokens(Line, " \t\n") ].
+
+print_reply(Reply) ->
+    io:format("~p~n", [Reply]).
+
+console_play() ->
+    {ok, Pid} = start_link(),
+    InitialReply = command(<<"look">>, [], Pid),
+    print_reply(InitialReply),
+    console_play(Pid).
+
+console_play(Pid) ->
+    [Cmd | Args] = get_cmd(),
+    case command(Cmd, Args, Pid) of
+        #{game_end := false} = Reply ->
+            print_reply(Reply),
+            console_play(Pid);
+        Reply ->
+            print_reply(Reply)
+    end.
