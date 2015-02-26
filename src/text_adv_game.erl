@@ -19,6 +19,7 @@
 %%% erl -eval 'compile:file(text_adv_game)' -eval 'text_adv_game:console_play()' -eval 'init:stop()' -noshell
 %%% '''
 %%%
+%%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(text_adv_game).
@@ -38,8 +39,11 @@
 %% name/X) here, or we'll lose ability to reload changed code.
 -export([cmd_look/4, cmd_go/4, cmd_get/4, cmd_quit/4]).
 
-%% Very simple console user UI.
+%% Very simple console user UI. 
 -export([console_play/0]).
+
+%% This is external exports for hot-reloading of console user UI.
+-export([get_cmd/0, console_play/1]).
 
 %% We are storing our gen_server state in map.
 -type state() :: #{}.
@@ -210,12 +214,33 @@ make_game_state() ->
 %%% Simple text interface for testing
 %%%===================================================================
 get_cmd() ->
-    Line = case io:get_line(">>> ") of
-               Str when is_list(Str) -> Str;
-               Str when is_binary(Str) -> binary_to_list(Str);
-               eof -> [<<"quit">>]
-           end,
-    [ list_to_binary(Token) || Token <- string:tokens(Line, " \t\n") ].
+    SelfPid = self(),
+    ReaderPid = spawn_link(
+                  fun () ->
+                          Line = case io:get_line(">>> ") of
+                                     Str when is_list(Str) -> Str;
+                                     Str when is_binary(Str) -> binary_to_list(Str);
+                                     eof -> [<<"quit">>]
+                                 end,
+                          SelfPid ! {line, Line}
+                  end),
+    case erlang:module_loaded(sync) of
+        true ->
+            sync:onsync(fun (_Mods) ->
+                                SelfPid ! reload
+                        end);
+        false ->
+            ok
+    end,
+    receive
+        {line, Line} ->
+            io:format("Got line~n", []),
+            [ list_to_binary(Token) || Token <- string:tokens(Line, " \t\n") ];
+        reload ->
+            exit(ReaderPid, stop_it),
+            io:format("Catched reload event~n", []),
+            ?MODULE:get_cmd()
+    end.
 
 print_reply(Reply) ->
     case Reply of 
@@ -240,7 +265,7 @@ console_play(Pid) ->
     case command(Cmd, Args, Pid) of
         #{game_end := false} = Reply ->
             print_reply(Reply),
-            console_play(Pid);
+            ?MODULE:console_play(Pid);
         #{game_end := Reason} = Reply ->
             print_reply(Reply),
             io:format("Game ended with reason '~p'~n", [Reason])
