@@ -218,7 +218,16 @@ get_cmd() ->
     [ list_to_binary(Token) || Token <- string:tokens(Line, " \t\n") ].
 
 print_reply(Reply) ->
-    io:format("~p~n", [Reply]).
+    case Reply of 
+        #{errors := []} ->
+            ok;
+        #{errors := Errors} ->
+            io:format("!!!! There were errors in your command:~n", []),
+            [ io:format("~s~n", [Err]) || Err <- Errors],
+            io:format("~n", [])
+    end,
+    [ io:format("~s~n", [Msg]) || Msg <- maps:get(messages, Reply)],
+    io:format("~n", []).
 
 console_play() ->
     {ok, Pid} = start_link(),
