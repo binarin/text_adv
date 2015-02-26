@@ -232,6 +232,7 @@ console_play(Pid) ->
         #{game_end := false} = Reply ->
             print_reply(Reply),
             console_play(Pid);
-        Reply ->
-            print_reply(Reply)
+        #{game_end := Reason} = Reply ->
+            print_reply(Reply),
+            io:format("Game ended with reason '~p'~n", [Reason])
     end.
