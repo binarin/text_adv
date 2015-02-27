@@ -86,6 +86,7 @@
 %% functions. This way we can have aliases, like the get/take in the
 %% following code.
 -define(KNOWN_COMMANDS, #{<<"look">> => cmd_look,
+                          <<"l">> => cmd_look,
                           <<"go">> => cmd_go,
                           <<"g">> => cmd_go,
                           <<"get">> => cmd_get,
@@ -99,6 +100,9 @@
 %% Initial locations of all objects in the game. Items in the
 %% inventory are marked by special location indicated by atom 'body'.
 -define(OBJECTS, #{ key => c }).
+
+-define(OBJECT_DESCRIPTIONS, #{ key => <<"a shining key">>
+                              }).
 
 %%%===================================================================
 %%% API
@@ -246,13 +250,14 @@ describe_room(#{location := Location, rooms := Rooms}) ->
 
 describe_directions(#{location_edges := Edges}) ->
     unlines(
-      [ io_lib:format("There is a ~s going to ~s from there", [Direction, Room])
+      [ io_lib:format("There is a '~s' going to location '~s' from there", [Direction, Room])
         || {Direction, Room} <- maps:to_list(Edges)
       ]).
 
-describe_objects(#{location := Location, objects := Objects}) ->
+describe_objects(#{location := Location, objects := Objects, object_descriptions := Descriptions}) ->
     ObjectsInCurrentLocation =
-        [ atom_to_list(Object) || {Object, ObjLocation} <- maps:to_list(Objects), ObjLocation == Location ],
+        [ binary_to_list(maps:get(Object, Descriptions))
+          || {Object, ObjLocation} <- maps:to_list(Objects), ObjLocation == Location ],
     case ObjectsInCurrentLocation of
         [] ->
             undefined;
@@ -266,6 +271,7 @@ make_game_state() ->
      , rooms => ?ROOMS
      , edges => ?EDGES
      , objects => ?OBJECTS
+     , object_descriptions => ?OBJECT_DESCRIPTIONS
      , commands => ?KNOWN_COMMANDS
      , status => playing
      }.
