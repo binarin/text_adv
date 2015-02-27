@@ -60,7 +60,7 @@
 -define(INITIAL_ROOM, a).
 
 %% Initial room descriptions.
--define(ROOMS, #{ e => <<"A nice garden">>
+-define(ROOMS, #{ e => <<"A nice garden\n\nCongratulations you've escaped">>
                 , a => <<"A cold room">>
                 , b => <<"A dusky room">>
                 , c => <<"A hot room">>
@@ -71,10 +71,15 @@
 %% rooms, there should be 2 edges going in opposite directions. Format
 %% is like this:
 %% #{ room_of_origin => #{ name_of_direction => destination_room, ... }, ...}
--define(EDGES, #{ a => #{ n => e, e => b, s => d }
-                , b => #{ w => a, s => c }
-                , c => #{ n => b, w => d }
-                , d => #{ n => a, e => c }
+-define(EDGES, #{ a => #{ <<"n">> => e,
+                          <<"e">> => b,
+                          <<"s">> => d }
+                , b => #{ <<"w">> => a,
+                          <<"s">> => c }
+                , c => #{ <<"n">> => b,
+                          <<"w">> => d }
+                , d => #{ <<"n">> => a,
+                          <<"e">> => c }
                 }).
 
 %% Initial mapping of command names that user can issue to corresponding
@@ -86,6 +91,10 @@
                           <<"take">> => cmd_get,
                           <<"quit">> => cmd_quit,
                           <<"exit">> => cmd_exit}).
+
+%% Initial locations of all objects in the game. Items in the
+%% inventory are marked by special location indicated by atom 'body'.
+-define(OBJECTS, #{ key => c }).
 
 %%%===================================================================
 %%% API
@@ -153,9 +162,10 @@ run_cmd(Cmd, Args, #{commands := Commands} = State) ->
 cmd_look(_Cmd, [], State, Reply) ->
     AddMessage = fun (Message, Acc) -> add_reply_text(Message, [], Acc) end,
     SkipEmptyString = fun (Str) -> Str =/= undefined end,
-    {State, lists:foldl(AddMessage, Reply,
+    {State, lists:foldr(AddMessage, Reply,
                         lists:filter(SkipEmptyString,
                                      [ describe_room(State)
+                                     , describe_directions(State)
                                      , describe_objects(State)
                                      ]))};
 cmd_look(_Cmd, _Args, State, Reply) ->
@@ -163,8 +173,19 @@ cmd_look(_Cmd, _Args, State, Reply) ->
 
 %% @doc Try to move in the direction specified by the player.
 -spec cmd_go(Cmd :: binary(), Args :: [binary()], State :: state(), Reply :: reply()) -> {state(), reply()}.
+cmd_go(_Cmd, [<<"n">>], #{location := a, objects := #{key := KeyLocation} } = State, Reply)
+  when KeyLocation =/= body ->
+    {State, add_reply_text("A strong iron door is blocking the way in that direction", Reply)};
+cmd_go(_Cmd, [Direction], #{location_edges := LocationEdges} = State, Reply) ->
+    case maps:find(Direction, LocationEdges) of
+        {ok, NewLocation} ->
+            State1 = move_to(NewLocation, State),
+            cmd_look(<<"look">>, [], State1, Reply);
+        error ->
+            {State, add_reply_error("Unknown direction: ~s", [Direction], Reply)}
+    end;
 cmd_go(_Cmd, _Direction, State, Reply) ->
-    {State, Reply}.
+    {State, add_reply_error("Usage: go <direction>", Reply)}.
 
 %% @doc Try to move the named object from the world to the player's inventory.
 -spec cmd_get(Cmd :: binary(), Args :: [binary()], State :: state(), Reply :: reply()) -> {state(), reply()}.
@@ -187,8 +208,14 @@ is_final_state(_State) ->
 make_empty_reply() ->
     #{ errors => [], messages => [], game_end => false}.
 
+add_reply_error(String, Reply) ->
+    add_reply_error("~s", [String], Reply).
+
 add_reply_error(FormatStr, Data, Reply) ->
     Reply#{ errors := [ list_to_binary(io_lib:format(FormatStr, Data)) | maps:get(errors, Reply) ]}.
+
+add_reply_text(String, Reply) ->
+    add_reply_text("~s", [String], Reply).
 
 add_reply_text(FormatStr, Data, Reply) ->
     Reply#{ messages := [ list_to_binary(io_lib:format(FormatStr, Data)) | maps:get(messages, Reply) ]}.
@@ -199,16 +226,38 @@ add_reply_game_end(Description, Reply) ->
 describe_room(#{location := Location, rooms := Rooms}) ->
     maps:get(Location, Rooms).
 
-describe_objects(_State) ->
-    undefined.
+describe_directions(#{location_edges := Edges}) ->
+    list_to_binary(
+      string:join(
+        [ io_lib:format("There is a ~s going to ~s from there", [Direction, Room])
+          || {Direction, Room} <- maps:to_list(Edges)
+        ], "\n")).
+
+describe_objects(#{location := Location, objects := Objects}) ->
+    ObjectsInCurrentLocation =
+        [ atom_to_list(Object) || {Object, ObjLocation} <- maps:to_list(Objects), ObjLocation == Location ],
+    case ObjectsInCurrentLocation of
+        [] ->
+            undefined;
+        ObjectNames ->
+            unlines(["I can also see the following:" | ObjectNames])
+    end.
 
 make_game_state() ->
     #{ location => ?INITIAL_ROOM
+     , location_edges => maps:get(?INITIAL_ROOM, ?EDGES)
      , rooms => ?ROOMS
      , edges => ?EDGES
+     , objects => ?OBJECTS
      , commands => ?KNOWN_COMMANDS
      , status => playing
      }.
+
+move_to(NewLocation, #{edges := Edges} = State) ->
+    State#{location := NewLocation, location_edges := maps:get(NewLocation, Edges)}.
+
+unlines(ListOfStrings) ->
+    list_to_binary(string:join(ListOfStrings, "\n")).
 
 %%%===================================================================
 %%% Simple text interface for testing
@@ -256,7 +305,7 @@ print_reply(Reply) ->
             [ io:format("~s~n", [Err]) || Err <- Errors],
             io:format("~n", [])
     end,
-    [ io:format("~s~n", [Msg]) || Msg <- maps:get(messages, Reply)],
+    [ io:format("~s~n~n", [Msg]) || Msg <- maps:get(messages, Reply)],
     io:format("~n", []).
 
 maybe_add_sync_hook() ->
