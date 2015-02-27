@@ -4,7 +4,7 @@
 %%% handled in some other place.
 %%%
 %%% Among other things process state contains:
-%%% - current set of room with their descriptions
+%%% - current set of rooms with their descriptions
 %%% - information about connectivity between rooms
 %%% - set of commands currently available to user
 %%%
@@ -19,14 +19,13 @@
 %%% erl -eval 'compile:file(text_adv_game)' -eval 'text_adv_game:console_play()' -eval 'init:stop()' -noinput
 %%% '''
 %%%
-%%%
 %%% @end
 %%%-------------------------------------------------------------------
 -module(text_adv_game).
 
 -behaviour(gen_server).
 
-%% API
+%% Public API
 -export([start_link/0, command/3]).
 
 %% gen_server callbacks
@@ -42,7 +41,7 @@
 %% Very simple console user UI. 
 -export([console_play/0]).
 
-%% This is external exports for hot-reloading of console user UI.
+%% This is internal exports for hot-reloading of console user UI.
 -export([console_play/1]).
 
 %% We are storing our gen_server state in map.
@@ -112,7 +111,7 @@
 start_link() ->
     gen_server:start_link(?MODULE, [], []).
 
-%% @doc Sends an user command to game server and awaits for reply that
+%% @doc Sends a user command to the game server and awaits for reply that
 %% should be presented to the user.
 -spec command(Cmd :: binary(), Args :: [binary()], GenServerRef :: term()) -> term().
 command(Cmd, Args, ServerRef) ->
@@ -155,8 +154,8 @@ code_change(_OldVsn, State, _Extra) ->
 %%%===================================================================
 
 %% @doc Main driving force of our game. In response to the user
-%% command we should decide what new world state would be and what we
-%% should we reply to the user.
+%% command we should decide what the new world state would be and what
+%% we should we reply to the user.
 -spec run_cmd(Cmd :: binary(), Args :: [binary()], State :: state()) -> {state(), reply()}.
 run_cmd(Cmd, Args, #{commands := Commands} = State) ->
     Reply = make_empty_reply(),
@@ -238,7 +237,7 @@ cmd_help(_Cmd, _Anything, #{commands := Commands} = State, Reply) ->
                            [string:join(GroupsAsStrings, ", ")],
                            Reply)}.
 
-%% @doc Stop the game
+%% @doc Stops the game
 -spec cmd_quit(Cmd :: binary(), Args :: [binary()], State :: state(), Reply :: reply()) -> {state(), reply()}.
 cmd_quit(_Cmd, _Object, State, Reply) ->
     {State#{status := quit}, Reply}.
