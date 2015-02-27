@@ -37,7 +37,7 @@
 %% them by name later. Command dispatch table is a part of our process
 %% state, so we couldn't just use short function references (fun
 %% name/X) here, or we'll lose ability to reload changed code.
--export([cmd_look/4, cmd_go/4, cmd_get/4, cmd_quit/4]).
+-export([cmd_look/4, cmd_go/4, cmd_get/4, cmd_quit/4, cmd_help/4]).
 
 %% Very simple console user UI. 
 -export([console_play/0]).
@@ -87,10 +87,14 @@
 %% following code.
 -define(KNOWN_COMMANDS, #{<<"look">> => cmd_look,
                           <<"go">> => cmd_go,
+                          <<"g">> => cmd_go,
                           <<"get">> => cmd_get,
                           <<"take">> => cmd_get,
                           <<"quit">> => cmd_quit,
-                          <<"exit">> => cmd_exit}).
+                          <<"exit">> => cmd_exit,
+                          <<"help">> => cmd_help,
+                          <<"h">> => cmd_help,
+                          <<"?">> => cmd_help}).
 
 %% Initial locations of all objects in the game. Items in the
 %% inventory are marked by special location indicated by atom 'body'.
@@ -192,6 +196,20 @@ cmd_go(_Cmd, _Direction, State, Reply) ->
 cmd_get(_Cmd, _Object, State, Reply) ->
     {State, Reply}.
 
+%% @doc Prints list of available commands, grouped by their real action.
+-spec cmd_help(Cmd :: binary(), Args :: [binary()], State :: state(), Reply :: reply()) -> {state(), reply()}.
+cmd_help(_Cmd, _Anything, #{commands := Commands} = State, Reply) ->
+    Groups = maps:values(
+               lists:foldl(
+                 fun ({Name, Cmd}, Acc) ->
+                         maps:put(Cmd, [ Name | maps:get(Cmd, Acc, []) ], Acc)
+                 end, #{}, maps:to_list(Commands))),
+    GroupsAsStrings = [ string:join([binary_to_list(Cmd) || Cmd <- GroupCommands], "|")
+                        || GroupCommands <- Groups ],
+    {State, add_reply_text("You can use any of the following commands: ~s",
+                           [string:join(GroupsAsStrings, ", ")],
+                           Reply)}.
+
 %% @doc Stop the game
 -spec cmd_quit(Cmd :: binary(), Args :: [binary()], State :: state(), Reply :: reply()) -> {state(), reply()}.
 cmd_quit(_Cmd, _Object, State, Reply) ->
@@ -227,11 +245,10 @@ describe_room(#{location := Location, rooms := Rooms}) ->
     maps:get(Location, Rooms).
 
 describe_directions(#{location_edges := Edges}) ->
-    list_to_binary(
-      string:join(
-        [ io_lib:format("There is a ~s going to ~s from there", [Direction, Room])
-          || {Direction, Room} <- maps:to_list(Edges)
-        ], "\n")).
+    unlines(
+      [ io_lib:format("There is a ~s going to ~s from there", [Direction, Room])
+        || {Direction, Room} <- maps:to_list(Edges)
+      ]).
 
 describe_objects(#{location := Location, objects := Objects}) ->
     ObjectsInCurrentLocation =
@@ -256,6 +273,9 @@ make_game_state() ->
 move_to(NewLocation, #{edges := Edges} = State) ->
     State#{location := NewLocation, location_edges := maps:get(NewLocation, Edges)}.
 
+%%%===================================================================
+%%% Non-game helpers
+%%%===================================================================
 unlines(ListOfStrings) ->
     list_to_binary(string:join(ListOfStrings, "\n")).
 
@@ -273,6 +293,8 @@ console_play() ->
 console_play(GamePid) ->
     io:format("~n>>> "),
     receive
+        {_Port, {data, {_EolFlag, []}}} ->
+            ?MODULE:console_play(GamePid);
         {_Port, {data, {_EolFlag, Line}}} ->
             [Cmd | Args ] = [ list_to_binary(Token) || Token <- string:tokens(Line, " \t\n") ],
             console_play_command(Cmd, Args, GamePid);
