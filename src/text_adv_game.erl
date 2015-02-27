@@ -16,7 +16,7 @@
 %%% the game can be run as following:
 %%%
 %%% ```
-%%% erl -eval 'compile:file(text_adv_game)' -eval 'text_adv_game:console_play()' -eval 'init:stop()' -noshell
+%%% erl -eval 'compile:file(text_adv_game)' -eval 'text_adv_game:console_play()' -eval 'init:stop()' -noinput
 %%% '''
 %%%
 %%%
@@ -43,7 +43,7 @@
 -export([console_play/0]).
 
 %% This is external exports for hot-reloading of console user UI.
--export([get_cmd/0, console_play/1]).
+-export([console_play/1]).
 
 %% We are storing our gen_server state in map.
 -type state() :: #{}.
@@ -213,33 +213,38 @@ make_game_state() ->
 %%%===================================================================
 %%% Simple text interface for testing
 %%%===================================================================
-get_cmd() ->
-    SelfPid = self(),
-    ReaderPid = spawn_link(
-                  fun () ->
-                          Line = case io:get_line(">>> ") of
-                                     Str when is_list(Str) -> Str;
-                                     Str when is_binary(Str) -> binary_to_list(Str);
-                                     eof -> [<<"quit">>]
-                                 end,
-                          SelfPid ! {line, Line}
-                  end),
-    case erlang:module_loaded(sync) of
-        true ->
-            sync:onsync(fun (_Mods) ->
-                                SelfPid ! reload
-                        end);
-        false ->
-            ok
-    end,
+console_play() ->
+    maybe_add_sync_hook(),
+    {ok, GamePid} = start_link(),
+    open_port({fd, 0, 1}, [{line, 1000}, in, eof]),
+    InitialReply = command(<<"look">>, [], GamePid),
+    print_reply(InitialReply),
+    console_play(GamePid).
+
+console_play(GamePid) ->
+    io:format("~n>>> "),
     receive
-        {line, Line} ->
-            io:format("Got line~n", []),
-            [ list_to_binary(Token) || Token <- string:tokens(Line, " \t\n") ];
+        {_Port, {data, {_EolFlag, Line}}} ->
+            [Cmd | Args ] = [ list_to_binary(Token) || Token <- string:tokens(Line, " \t\n") ],
+            console_play_command(Cmd, Args, GamePid);
+        {_Port, eof} ->
+            io:format("~nGoodbye!");
         reload ->
-            exit(ReaderPid, stop_it),
-            io:format("Catched reload event~n", []),
-            ?MODULE:get_cmd()
+            maybe_add_sync_hook(),  %% Because old hook function will be invalid after next code load
+            ?MODULE:console_play(GamePid);
+        Any ->
+            io:format("Unknown message: ~p~n", [Any]),
+            ?MODULE:console_play(GamePid)
+    end.
+
+console_play_command(Cmd, Args, GamePid) ->
+    case command(Cmd, Args, GamePid) of
+        #{game_end := false} = Reply ->
+            print_reply(Reply),
+            ?MODULE:console_play(GamePid);
+        #{game_end := Reason} = Reply ->
+            print_reply(Reply),
+            io:format("Game ended with reason '~p'~n", [Reason])
     end.
 
 print_reply(Reply) ->
@@ -254,19 +259,13 @@ print_reply(Reply) ->
     [ io:format("~s~n", [Msg]) || Msg <- maps:get(messages, Reply)],
     io:format("~n", []).
 
-console_play() ->
-    {ok, Pid} = start_link(),
-    InitialReply = command(<<"look">>, [], Pid),
-    print_reply(InitialReply),
-    console_play(Pid).
-
-console_play(Pid) ->
-    [Cmd | Args] = get_cmd(),
-    case command(Cmd, Args, Pid) of
-        #{game_end := false} = Reply ->
-            print_reply(Reply),
-            ?MODULE:console_play(Pid);
-        #{game_end := Reason} = Reply ->
-            print_reply(Reply),
-            io:format("Game ended with reason '~p'~n", [Reason])
+maybe_add_sync_hook() ->
+    case erlang:module_loaded(sync) of
+        true ->
+            SelfPid = self(),
+            sync:onsync(fun (_Mods) ->
+                                SelfPid ! reload
+                        end);
+        false ->
+            ok
     end.
