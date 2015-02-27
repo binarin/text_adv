@@ -8,11 +8,11 @@
 %%% - information about connectivity between rooms
 %%% - set of commands currently available to user
 %%%
-%%% This we can dynamically change any aspect during a course of the
-%%% game.
+%%% This way we can dynamically change any aspect during the course of
+%%% the game.
 %%%
 %%% For testing purposes simple console based UI was also added to
-%%% this file, so we don't have to create multiple files. In this mode
+%%% this file, so we don't have to use multiple files. In this mode
 %%% the game can be run as following:
 %%%
 %%% ```
@@ -60,7 +60,7 @@
 -define(INITIAL_ROOM, a).
 
 %% Initial room descriptions.
--define(ROOMS, #{ e => <<"A nice garden\n\nCongratulations you've escaped">>
+-define(ROOMS, #{ e => <<"A nice garden\nCongratulations you've escaped">>
                 , a => <<"A cold room">>
                 , b => <<"A dusky room">>
                 , c => <<"A hot room">>
@@ -80,6 +80,7 @@
                           <<"w">> => d }
                 , d => #{ <<"n">> => a,
                           <<"e">> => c }
+                , e => #{ }
                 }).
 
 %% Initial mapping of command names that user can issue to corresponding
@@ -92,7 +93,8 @@
                           <<"get">> => cmd_get,
                           <<"take">> => cmd_get,
                           <<"quit">> => cmd_quit,
-                          <<"exit">> => cmd_exit,
+                          <<"exit">> => cmd_quit,
+                          <<"q">> => cmd_quit,
                           <<"help">> => cmd_help,
                           <<"h">> => cmd_help,
                           <<"?">> => cmd_help}).
@@ -124,12 +126,13 @@ init([]) ->
     {ok, make_game_state()}.
 
 handle_call({command, Cmd, Args}, _From, State) ->
-    {State1, Reply} = run_cmd(Cmd, Args, State),
+    {State1, #{messages := Messages, errors := Errors} = Reply} = run_cmd(Cmd, Args, State),
+    Reply1 = Reply#{ messages := lists:reverse(Messages), errors := lists:reverse(Errors) },
     case is_final_state(State1) of
         true ->
-            {stop, normal, add_reply_game_end(maps:get(status, State1), Reply), State1};
+            {stop, normal, add_reply_game_end(maps:get(status, State1), Reply1), State1};
         false ->
-            {reply, Reply, State1}
+            {reply, Reply1, State1}
     end;
 handle_call(_Request, _From, State) ->
     Reply = make_empty_reply(),
@@ -170,20 +173,23 @@ run_cmd(Cmd, Args, #{commands := Commands} = State) ->
 cmd_look(_Cmd, [], State, Reply) ->
     AddMessage = fun (Message, Acc) -> add_reply_text(Message, [], Acc) end,
     SkipEmptyString = fun (Str) -> Str =/= undefined end,
-    {State, lists:foldr(AddMessage, Reply,
+    {State, lists:foldl(AddMessage, Reply,
                         lists:filter(SkipEmptyString,
                                      [ describe_room(State)
                                      , describe_directions(State)
                                      , describe_objects(State)
                                      ]))};
-cmd_look(_Cmd, _Args, State, Reply) ->
-    {State, add_reply_error("Usage: look (without any arguments)", [], Reply)}.
+cmd_look(Cmd, _Args, State, Reply) ->
+    {State, add_reply_error("Usage: ~s (without any arguments)", [Cmd], Reply)}.
 
 %% @doc Try to move in the direction specified by the player.
 -spec cmd_go(Cmd :: binary(), Args :: [binary()], State :: state(), Reply :: reply()) -> {state(), reply()}.
 cmd_go(_Cmd, [<<"n">>], #{location := a, objects := #{key := KeyLocation} } = State, Reply)
   when KeyLocation =/= body ->
     {State, add_reply_text("A strong iron door is blocking the way in that direction", Reply)};
+cmd_go(_Cmd, [<<"n">>], #{location := a, objects := #{key := body} } = State, Reply) ->
+    cmd_look(<<"look">>, [], game_won(move_to(e, State)),
+             add_reply_text("You use a shining key to unlock a strong iron door", Reply));
 cmd_go(_Cmd, [Direction], #{location_edges := LocationEdges} = State, Reply) ->
     case maps:find(Direction, LocationEdges) of
         {ok, NewLocation} ->
@@ -192,13 +198,31 @@ cmd_go(_Cmd, [Direction], #{location_edges := LocationEdges} = State, Reply) ->
         error ->
             {State, add_reply_error("Unknown direction: ~s", [Direction], Reply)}
     end;
-cmd_go(_Cmd, _Direction, State, Reply) ->
-    {State, add_reply_error("Usage: go <direction>", Reply)}.
+cmd_go(Cmd, _Direction, State, Reply) ->
+    {State, add_reply_error("Usage: ~s <direction>", [Cmd], Reply)}.
 
 %% @doc Try to move the named object from the world to the player's inventory.
 -spec cmd_get(Cmd :: binary(), Args :: [binary()], State :: state(), Reply :: reply()) -> {state(), reply()}.
-cmd_get(_Cmd, _Object, State, Reply) ->
-    {State, Reply}.
+cmd_get(_Cmd, [ObjectNameStr], #{ objects := Objects
+                                , location := CurrentLocation
+                                , object_descriptions := Descriptions
+                                } = State, Reply) ->
+    ObjectName = case catch erlang:binary_to_existing_atom(ObjectNameStr, utf8) of
+                     {'EXIT', _} -> undefined;
+                     Atom -> Atom
+                 end,
+    case maps:find(ObjectName, Objects) of
+        {ok, CurrentLocation} ->
+            { State#{ objects := maps:put(ObjectName, body, Objects)}
+            , add_reply_text("You pick up ~s", [maps:get(ObjectName, Descriptions)], Reply)
+            };
+        {ok, body} ->
+            { State, add_reply_error("You already have this", Reply) };
+        error ->
+            { State, add_reply_error("There is no such thing as ~s", [ObjectNameStr], Reply) }
+    end;
+cmd_get(Cmd, _Object, State, Reply) ->
+    {State, add_reply_error("Usage: ~s <object>", [Cmd], Reply)}.
 
 %% @doc Prints list of available commands, grouped by their real action.
 -spec cmd_help(Cmd :: binary(), Args :: [binary()], State :: state(), Reply :: reply()) -> {state(), reply()}.
@@ -279,6 +303,9 @@ make_game_state() ->
 move_to(NewLocation, #{edges := Edges} = State) ->
     State#{location := NewLocation, location_edges := maps:get(NewLocation, Edges)}.
 
+game_won(State) ->
+    State#{ status := won }.
+
 %%%===================================================================
 %%% Non-game helpers
 %%%===================================================================
@@ -289,6 +316,9 @@ unlines(ListOfStrings) ->
 %%% Simple text interface for testing
 %%%===================================================================
 console_play() ->
+    io:format("========~nLet the adventure begin.~n"
+              "Use 'help' to find out about available commands, or 'quit' / Ctrl-D to exit~n"
+              "========~n"),
     maybe_add_sync_hook(),
     {ok, GamePid} = start_link(),
     open_port({fd, 0, 1}, [{line, 1000}, in, eof]),
